@@ -54,12 +54,22 @@ class AudioProcessor:
         # Initialize models dictionary
         self.models = {}
         
-        # Set output directory
-        if output_dir is None:
-            self.output_dir = Path(tempfile.mkdtemp())
-        else:
-            self.output_dir = Path(output_dir)
+        try:
+            # Set output directory
+            if output_dir is None:
+                self.output_dir = Path(tempfile.mkdtemp(prefix="vocals_"))
+            else:
+                self.output_dir = Path(output_dir)
+            
+            # Ensure directory exists with proper permissions
             os.makedirs(self.output_dir, exist_ok=True)
+            os.chmod(self.output_dir, 0o755)  # rwxr-xr-x permissions
+            
+            logger.debug(f"Initialized output directory: {self.output_dir}")
+            
+        except Exception as e:
+            logger.error(f"Error initializing output directory: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Failed to initialize output directory: {str(e)}")
     
     def _load_model(self, model_name: str) -> Any:
         """
@@ -75,20 +85,38 @@ class AudioProcessor:
         _, _, get_model, _, _ = _import_torch_modules()
         
         if model_name not in self.models:
-            print(f"Loading model: {model_name}")
+            logger.info(f"Loading model: {model_name}")
             model = get_model(model_name)
             model.to(self.device)
             self.models[model_name] = model
         return self.models[model_name]
     
-    def _setup_torch(self):
-        """Set up PyTorch and related imports."""
-        torch, torchaudio, _, _, _ = _import_torch_modules()
-        if self.device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            print(f"Using device: {self.device}")
-        return torch, torchaudio
-
+    def _validate_audio_file(self, audio_path: str) -> None:
+        """
+        Validate the audio file before processing.
+        
+        Args:
+            audio_path: Path to the audio file to validate.
+            
+        Raises:
+            ValueError: If the file is invalid or cannot be read.
+        """
+        if not os.path.exists(audio_path):
+            raise ValueError(f"Audio file not found: {audio_path}")
+            
+        try:
+            info = sf.info(audio_path)
+            logger.debug(f"Audio file info - Samplerate: {info.samplerate}, Channels: {info.channels}, Format: {info.format}, Duration: {info.duration}s")
+            
+            if info.duration < 0.1:  # Less than 100ms
+                raise ValueError("Audio file is too short")
+                
+            if info.channels > 2:
+                raise ValueError(f"Audio file has unsupported number of channels: {info.channels}")
+                
+        except Exception as e:
+            raise ValueError(f"Failed to read audio file: {str(e)}")
+    
     def process_audio(
         self, 
         audio_path: str, 
@@ -111,30 +139,29 @@ class AudioProcessor:
         Returns:
             Path to the processed vocals file.
         """
-        # Import required modules
+        # Validate the audio file
+        self._validate_audio_file(audio_path)
+        
+        # Set up PyTorch and import required modules
         torch, torchaudio, get_model, apply_model, load_track = _import_torch_modules()
+        if self.device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            logger.debug(f"Using device: {self.device}")
         logger.debug("PyTorch modules imported successfully")
         
         # Load the model
-        if model_name not in self.models:
-            logger.info(f"Loading model: {model_name}")
-            model = get_model(model_name)
-            model.to(self.device)
-            self.models[model_name] = model
-        model = self.models[model_name]
+        model = self._load_model(model_name)
         logger.debug(f"Model loaded successfully: {model_name}")
-        
-        # Import torch and set up device first
-        torch, torchaudio = self._setup_torch()
-        logger.debug(f"Using device: {self.device}")
         
         try:
             # Load the audio track
             wav = load_track(audio_path, model.audio_channels, model.samplerate)
             logger.debug(f"Audio loaded - Type: {type(wav)}, Shape: {wav.shape}, dtype: {wav.dtype}")
             
-            # Convert to tensor before any operations and move to correct device
-            wav = torch.from_numpy(wav).to(device=self.device, dtype=torch.float32)
+            # Move to correct device and ensure correct dtype
+            if not isinstance(wav, torch.Tensor):
+                wav = torch.from_numpy(wav)
+            wav = wav.to(device=self.device, dtype=torch.float32)
             logger.debug(f"Converted to tensor - Type: {type(wav)}, Shape: {wav.shape}, dtype: {wav.dtype}, device: {wav.device}")
             
             # Get the source names from the model
@@ -183,15 +210,45 @@ class AudioProcessor:
         output_path = str(self.output_dir / output_filename)
         
         try:
-            # Save the vocals to a file
-            vocals_tensor = torch.from_numpy(vocals).to(dtype=torch.float32)
-            logger.debug(f"Vocals tensor for saving - Type: {type(vocals_tensor)}, Shape: {vocals_tensor.shape}, dtype: {vocals_tensor.dtype}")
+            # Verify the output directory still exists
+            if not self.output_dir.exists():
+                os.makedirs(self.output_dir, exist_ok=True)
+                logger.warning(f"Output directory was missing, recreated: {self.output_dir}")
             
-            torchaudio.save(
-                output_path,
-                vocals_tensor.t(),
-                model.samplerate
-            )
+            # Convert vocals to numpy and ensure correct shape for soundfile
+            vocals_numpy = vocals
+            if vocals_numpy.shape[0] > vocals_numpy.shape[1]:
+                vocals_numpy = vocals_numpy.T  # Transpose if needed
+            
+            logger.debug(f"Vocals array for saving - Type: {type(vocals_numpy)}, Shape: {vocals_numpy.shape}")
+            
+            # Normalize audio to prevent clipping
+            max_val = np.abs(vocals_numpy).max()
+            if max_val > 1.0:
+                vocals_numpy = vocals_numpy / max_val
+                logger.debug(f"Normalized audio (max value was: {max_val})")
+            
+            # Save using soundfile
+            try:
+                sf.write(
+                    output_path,
+                    vocals_numpy.T,  # soundfile expects (frames, channels)
+                    model.samplerate,
+                    format='WAV',
+                    subtype='PCM_16'  # Use 16-bit PCM format
+                )
+            except Exception as e:
+                logger.error(f"Failed to save audio with soundfile: {str(e)}")
+                # Try alternate save method
+                try:
+                    import scipy.io.wavfile as wavfile
+                    logger.debug("Attempting to save with scipy.io.wavfile")
+                    # Convert to 16-bit PCM
+                    vocals_int16 = (vocals_numpy * 32767).astype(np.int16)
+                    wavfile.write(output_path, model.samplerate, vocals_int16.T)
+                except Exception as e2:
+                    logger.error(f"Failed to save audio with scipy.io.wavfile: {str(e2)}")
+                    raise RuntimeError(f"Could not save audio file using multiple methods: {str(e)}, {str(e2)}")
             logger.info(f"Successfully saved vocals to: {output_path}")
             
             return output_path
