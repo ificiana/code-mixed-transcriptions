@@ -1,4 +1,17 @@
 import streamlit as st
+import sys
+sys.path.append(".")
+
+from src.utils.logging_config import get_logger
+from src.audio_processor import AudioProcessor
+import librosa
+import librosa.display
+import matplotlib.pyplot as plt
+import os
+import tempfile
+
+# Get module logger
+logger = get_logger(__name__)
 
 st.set_page_config(
     page_title="Audio Chunking",
@@ -6,24 +19,17 @@ st.set_page_config(
     layout="wide"
 )
 
-import librosa
-import librosa.display
-import matplotlib.pyplot as plt
-import numpy as np
-import os
-import tempfile
-import sys
-sys.path.append(".")
-from src.audio_processor import AudioProcessor
-
 def cleanup_old_chunks():
     """Clean up old chunk files"""
     if os.path.exists("temp_chunks"):
+        logger.info("Cleaning up old chunk files")
         for file in os.listdir("temp_chunks"):
             try:
-                os.remove(os.path.join("temp_chunks", file))
-            except:
-                pass
+                file_path = os.path.join("temp_chunks", file)
+                os.remove(file_path)
+                logger.debug(f"Removed old chunk file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove chunk file {file}: {str(e)}", exc_info=True)
 
 # Initialize audio processor with a fixed output directory
 @st.cache_resource
@@ -39,6 +45,7 @@ if 'processed_file' not in st.session_state:
     st.session_state.processed_file = None
 
 def main():
+    logger.info("Starting Audio Chunking page")
     st.title("Audio Chunking")
     st.markdown("""
     Split your audio files into smaller chunks. This is useful for processing long audio files
@@ -58,10 +65,12 @@ def main():
     uploaded_file = st.file_uploader("Upload an audio file", type=["mp3", "wav", "ogg", "flac"])
     
     if uploaded_file is not None:
+        logger.info(f"Processing uploaded file: {uploaded_file.name}")
         # Save uploaded file to a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_filepath = tmp_file.name
+            logger.debug(f"Saved uploaded file to temporary path: {tmp_filepath}")
         
         try:
             # Load and display original audio
@@ -86,6 +95,7 @@ def main():
             # Only process if file changed or no chunks exist
             if st.session_state.processed_file != uploaded_file.name or st.session_state.chunk_paths is None:
                 if st.button("Create Chunks"):
+                    logger.info(f"Starting audio chunking with duration: {chunk_duration} seconds")
                     st.info("Creating audio chunks...")
                     
                     # Clean up old chunks before processing new ones
@@ -95,7 +105,9 @@ def main():
                     st.session_state.chunk_paths = audio_processor.chunk_audio(tmp_filepath, chunk_duration)
                     st.session_state.processed_file = uploaded_file.name
                     
-                    st.success(f"Created {len(st.session_state.chunk_paths)} chunks!")
+                    num_chunks = len(st.session_state.chunk_paths)
+                    logger.info(f"Successfully created {num_chunks} chunks")
+                    st.success(f"Created {num_chunks} chunks!")
             
             # Display chunks if they exist
             if st.session_state.chunk_paths:
@@ -129,14 +141,16 @@ def main():
                                 )
                 
         except Exception as e:
+            logger.error(f"Error processing audio: {str(e)}", exc_info=True)
             st.error(f"Error processing audio: {str(e)}")
         
         finally:
             # Clean up temporary files
             try:
                 os.remove(tmp_filepath)
-            except:
-                pass
+                logger.debug(f"Cleaned up temporary file: {tmp_filepath}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file: {tmp_filepath}", exc_info=True)
 
 if __name__ == "__main__":
     main()

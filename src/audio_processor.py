@@ -12,6 +12,10 @@ from typing import Optional, Any, List
 import librosa
 import soundfile as sf
 import numpy as np
+from .utils.logging_config import get_logger
+
+# Get module logger
+logger = get_logger(__name__)
 
 # Safely import torch-related modules
 def _import_torch_modules():
@@ -67,6 +71,9 @@ class AudioProcessor:
         Returns:
             The loaded model.
         """
+        # Import required modules
+        _, _, get_model, _, _ = _import_torch_modules()
+        
         if model_name not in self.models:
             print(f"Loading model: {model_name}")
             model = get_model(model_name)
@@ -106,65 +113,92 @@ class AudioProcessor:
         """
         # Import required modules
         torch, torchaudio, get_model, apply_model, load_track = _import_torch_modules()
+        logger.debug("PyTorch modules imported successfully")
         
         # Load the model
         if model_name not in self.models:
-            print(f"Loading model: {model_name}")
+            logger.info(f"Loading model: {model_name}")
             model = get_model(model_name)
             model.to(self.device)
             self.models[model_name] = model
         model = self.models[model_name]
+        logger.debug(f"Model loaded successfully: {model_name}")
         
-        # Load the audio track
-        wav = load_track(audio_path, model.audio_channels, model.samplerate)
-        
-        # Get the source names from the model
-        sources = model.sources
-        
-        # Apply the model to separate sources
-        ref = wav.mean(0)  # Downmix to mono for reference
-        wav = (wav - ref.mean()) / ref.std()  # Normalize
-        
-        # Import torch and set up device
+        # Import torch and set up device first
         torch, torchaudio = self._setup_torch()
+        logger.debug(f"Using device: {self.device}")
         
-        # Convert to tensor using recommended approach
-        wav = torch.from_numpy(wav).to(dtype=torch.float32)
+        try:
+            # Load the audio track
+            wav = load_track(audio_path, model.audio_channels, model.samplerate)
+            logger.debug(f"Audio loaded - Type: {type(wav)}, Shape: {wav.shape}, dtype: {wav.dtype}")
+            
+            # Convert to tensor before any operations and move to correct device
+            wav = torch.from_numpy(wav).to(device=self.device, dtype=torch.float32)
+            logger.debug(f"Converted to tensor - Type: {type(wav)}, Shape: {wav.shape}, dtype: {wav.dtype}, device: {wav.device}")
+            
+            # Get the source names from the model
+            sources = model.sources
+            logger.debug(f"Model sources: {sources}")
+            
+            # Apply the model to separate sources
+            ref = wav.mean(0)  # Downmix to mono for reference
+            logger.debug(f"Reference mean - Type: {type(ref)}, Shape: {ref.shape}")
+            wav = (wav - ref.mean()) / ref.std()  # Normalize
+            logger.debug(f"After normalization - Type: {type(wav)}, Shape: {wav.shape}")
         
-        # Apply the model
-        with torch.no_grad():
-            sources = apply_model(
-                model, 
-                wav[None], 
-                device=self.device, 
-                shifts=shifts, 
-                split=True, 
-                overlap=overlap,
-                segment=segment
-            )[0]
-        
-        # Convert back to numpy
-        sources = sources.cpu().numpy()
-        
-        # Get the vocals index
-        vocals_idx = model.sources.index("vocals")
-        
-        # Extract vocals
-        vocals = sources[vocals_idx]
+            # Apply the model
+            with torch.no_grad():
+                logger.debug(f"Input to apply_model - Type: {type(wav[None])}, Shape: {wav[None].shape}")
+                sources = apply_model(
+                    model, 
+                    wav[None], 
+                    device=self.device, 
+                    shifts=shifts, 
+                    split=True, 
+                    overlap=overlap,
+                    segment=segment
+                )[0]
+                logger.debug(f"After apply_model - Type: {type(sources)}, Shape: {sources.shape}")
+            
+            # Convert back to numpy
+            sources = sources.cpu().numpy()
+            logger.debug(f"Converted to numpy - Type: {type(sources)}, Shape: {sources.shape}")
+            
+            # Get the vocals index
+            vocals_idx = model.sources.index("vocals")
+            logger.debug(f"Vocals index: {vocals_idx}")
+            
+            # Extract vocals
+            vocals = sources[vocals_idx]
+            logger.debug(f"Extracted vocals - Type: {type(vocals)}, Shape: {vocals.shape}")
+            
+        except Exception as e:
+            logger.error(f"Error during audio processing: {str(e)}", exc_info=True)
+            raise
         
         # Create output filename
         input_filename = os.path.basename(audio_path)
         output_filename = f"vocals_{os.path.splitext(input_filename)[0]}.wav"
         output_path = str(self.output_dir / output_filename)
         
-        # Save the vocals to a file
-        torchaudio.save(
-            output_path,
-            torch.from_numpy(vocals).to(dtype=torch.float32).t(),
-            model.samplerate
-        )
-        
-        return output_path
+        try:
+            # Save the vocals to a file
+            vocals_tensor = torch.from_numpy(vocals).to(dtype=torch.float32)
+            logger.debug(f"Vocals tensor for saving - Type: {type(vocals_tensor)}, Shape: {vocals_tensor.shape}, dtype: {vocals_tensor.dtype}")
+            
+            torchaudio.save(
+                output_path,
+                vocals_tensor.t(),
+                model.samplerate
+            )
+            logger.info(f"Successfully saved vocals to: {output_path}")
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Error saving audio file: {str(e)}", exc_info=True)
+            raise
     
     def chunk_audio(self, audio_path: str, chunk_duration: int = 30) -> List[str]:
         """

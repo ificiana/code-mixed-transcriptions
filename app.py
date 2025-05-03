@@ -1,4 +1,13 @@
 import streamlit as st
+from src.utils.logging_config import setup_logging, get_logger
+
+# Add src directory to Python path
+import sys
+sys.path.append(".")
+
+# Initialize logging
+setup_logging()
+logger = get_logger(__name__)
 
 st.set_page_config(
     page_title="Audio Processing App",
@@ -7,6 +16,7 @@ st.set_page_config(
 )
 
 def main():
+    logger.info("Starting Audio Processing App")
     st.title("Audio Processing App")
     
     st.markdown("""
@@ -33,10 +43,12 @@ def main():
     
     with col1:
         if st.button("🎵 Audio Chunking", use_container_width=True, help="Split long recordings into smaller segments"):
+            logger.info("Navigating to Audio Chunking page")
             st.switch_page("pages/1_audio_chunking.py")
     
     with col2:
         if st.button("🎤 Voice Isolation", use_container_width=True, help="Extract clean vocals from mixed audio"):
+            logger.info("Navigating to Voice Isolation page")
             st.switch_page("pages/2_voice_isolation.py")
             
     st.markdown("""

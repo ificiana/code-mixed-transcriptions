@@ -1,4 +1,18 @@
 import streamlit as st
+import sys
+sys.path.append(".")
+
+from src.utils.logging_config import get_logger
+from src.audio_processor import AudioProcessor
+import numpy as np
+import matplotlib.pyplot as plt
+import librosa
+import librosa.display
+import os
+import tempfile
+
+# Get module logger
+logger = get_logger(__name__)
 
 st.set_page_config(
     page_title="Voice Isolation",
@@ -6,22 +20,13 @@ st.set_page_config(
     layout="wide"
 )
 
-import numpy as np
-import matplotlib.pyplot as plt
-import librosa
-import librosa.display
-import os
-import tempfile
-import sys
-sys.path.append(".")
-from src.audio_processor import AudioProcessor
-
 # Initialize audio processor
 @st.cache_resource
 def get_audio_processor():
     return AudioProcessor()
 
 def main():
+    logger.info("Starting Voice Isolation page")
     st.title("Voice Isolation")
     st.markdown("""
     Clean audio files by isolating vocals and removing background noise.
@@ -49,10 +54,12 @@ def main():
     uploaded_file = st.file_uploader("Upload an audio file", type=["mp3", "wav", "ogg", "flac"])
     
     if uploaded_file is not None:
+        logger.info(f"Processing uploaded file: {uploaded_file.name}")
         # Save uploaded file to a temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_filepath = tmp_file.name
+            logger.debug(f"Saved uploaded file to temporary path: {tmp_filepath}")
         
         # Process the audio file
         st.info("Processing audio... This may take a moment.")
@@ -61,6 +68,7 @@ def main():
         
         with st.spinner("Separating vocals..."):
             try:
+                logger.info(f"Starting audio processing with model: {model_type}, shifts: {shifts}, overlap: {overlap}")
                 # Process the audio
                 vocals_path = audio_processor.process_audio(
                     tmp_filepath, 
@@ -68,6 +76,7 @@ def main():
                     shifts=shifts,
                     overlap=overlap
                 )
+                logger.info("Audio processing completed successfully")
                 
                 # Load the processed audio for visualization
                 y_original, sr_original = librosa.load(tmp_filepath, sr=None)
@@ -130,14 +139,16 @@ def main():
                     )
                 
             except Exception as e:
+                logger.error(f"Error processing audio: {str(e)}", exc_info=True)
                 st.error(f"Error processing audio: {str(e)}")
             
             finally:
                 # Clean up temporary files
                 try:
                     os.remove(tmp_filepath)
-                except:
-                    pass
+                    logger.debug(f"Cleaned up temporary file: {tmp_filepath}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file: {tmp_filepath}", exc_info=True)
 
 if __name__ == "__main__":
     main()
