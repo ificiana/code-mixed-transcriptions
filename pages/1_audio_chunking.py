@@ -16,10 +16,27 @@ import sys
 sys.path.append(".")
 from src.audio_processor import AudioProcessor
 
-# Initialize audio processor
+def cleanup_old_chunks():
+    """Clean up old chunk files"""
+    if os.path.exists("temp_chunks"):
+        for file in os.listdir("temp_chunks"):
+            try:
+                os.remove(os.path.join("temp_chunks", file))
+            except:
+                pass
+
+# Initialize audio processor with a fixed output directory
 @st.cache_resource
 def get_audio_processor():
-    return AudioProcessor()
+    output_dir = "temp_chunks"
+    os.makedirs(output_dir, exist_ok=True)
+    return AudioProcessor(output_dir=output_dir)
+
+# Initialize session state
+if 'chunk_paths' not in st.session_state:
+    st.session_state.chunk_paths = None
+if 'processed_file' not in st.session_state:
+    st.session_state.processed_file = None
 
 def main():
     st.title("Audio Chunking")
@@ -66,18 +83,24 @@ def main():
                 st.markdown(f"**Sample Rate:** {sr_original} Hz")
                 st.audio(tmp_filepath, format=f"audio/{uploaded_file.name.split('.')[-1]}")
             
-            # Create chunks
-            if st.button("Create Chunks"):
-                st.info("Creating audio chunks...")
-                
-                audio_processor = get_audio_processor()
-                chunk_paths = audio_processor.chunk_audio(tmp_filepath, chunk_duration)
-                
-                st.success(f"Created {len(chunk_paths)} chunks!")
-                
-                # Display chunks
+            # Only process if file changed or no chunks exist
+            if st.session_state.processed_file != uploaded_file.name or st.session_state.chunk_paths is None:
+                if st.button("Create Chunks"):
+                    st.info("Creating audio chunks...")
+                    
+                    # Clean up old chunks before processing new ones
+                    cleanup_old_chunks()
+                    
+                    audio_processor = get_audio_processor()
+                    st.session_state.chunk_paths = audio_processor.chunk_audio(tmp_filepath, chunk_duration)
+                    st.session_state.processed_file = uploaded_file.name
+                    
+                    st.success(f"Created {len(st.session_state.chunk_paths)} chunks!")
+            
+            # Display chunks if they exist
+            if st.session_state.chunk_paths:
                 st.subheader("Audio Chunks")
-                for i, chunk_path in enumerate(chunk_paths, 1):
+                for i, chunk_path in enumerate(st.session_state.chunk_paths, 1):
                     with st.expander(f"Chunk {i}"):
                         # Load chunk for visualization
                         y_chunk, sr_chunk = librosa.load(chunk_path, sr=None)
