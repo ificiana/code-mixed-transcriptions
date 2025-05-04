@@ -11,6 +11,7 @@ import librosa.display
 import os
 import tempfile
 import torch
+import atexit
 
 # Get module logger
 logger = get_logger(__name__)
@@ -25,6 +26,53 @@ st.set_page_config(
 @st.cache_resource
 def get_audio_processor():
     return AudioProcessor()
+
+def cleanup_files():
+    """Clean up temporary files"""
+    if 'temp_files' in st.session_state:
+        for filepath in st.session_state.temp_files:
+            try:
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    logger.debug(f"Cleaned up temporary file: {filepath}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file: {filepath}", exc_info=True)
+        st.session_state.temp_files = []
+
+# Register cleanup on exit
+atexit.register(cleanup_files)
+
+# Initialize session state
+if 'temp_files' not in st.session_state:
+    st.session_state.temp_files = []
+if 'enhanced_audio' not in st.session_state:
+    st.session_state.enhanced_audio = None
+if 'process_audio' not in st.session_state:
+    st.session_state.process_audio = False
+if 'processed_file' not in st.session_state:
+    st.session_state.processed_file = None
+if 'enhanced_path' not in st.session_state:
+    st.session_state.enhanced_path = None
+
+def process_audio_file(filepath, chunk_size, overlap):
+    """Process audio file and store enhanced audio in session state"""
+    logger.info(f"Starting audio processing with chunk_size: {chunk_size}, overlap: {overlap}")
+    
+    audio_processor = get_audio_processor()
+    enhanced_path = audio_processor.process_audio(
+        filepath,
+        chunk_size=chunk_size,
+        overlap=overlap
+    )
+    st.session_state.temp_files.append(enhanced_path)
+    st.session_state.enhanced_path = enhanced_path
+    
+    # Store enhanced audio data in session state
+    with open(enhanced_path, "rb") as file:
+        st.session_state.enhanced_audio = file.read()
+    
+    logger.info("Audio processing completed successfully")
+    return enhanced_path
 
 def main():
     logger.info("Starting Speech Enhancement page")
@@ -68,29 +116,28 @@ def main():
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_filepath = tmp_file.name
+            st.session_state.temp_files.append(tmp_filepath)
             logger.debug(f"Saved uploaded file to temporary path: {tmp_filepath}")
         
-        # Process the audio file
-        st.info("Processing audio... This may take a moment.")
+        # Only process if file changed or not processed yet
+        if st.session_state.processed_file != uploaded_file.name or st.session_state.enhanced_audio is None:
+            st.info("Processing audio... This may take a moment.")
+            st.session_state.process_audio = True
+            st.session_state.processed_file = uploaded_file.name
         
-        audio_processor = get_audio_processor()
-        
-        with st.spinner("Enhancing speech..."):
-            try:
-                logger.info(f"Starting audio processing with chunk_size: {chunk_size}, overlap: {overlap}")
-                # Process the audio
-                enhanced_path = audio_processor.process_audio(
-                    tmp_filepath,
-                    chunk_size=chunk_size,
-                    overlap=overlap
-                )
-                logger.info("Audio processing completed successfully")
-                
-                # Load the processed audio for visualization
+        try:
+            # Process audio if needed
+            if st.session_state.process_audio:
+                with st.spinner("Enhancing speech..."):
+                    process_audio_file(tmp_filepath, chunk_size, overlap)
+                    st.success("Audio processing complete!")
+                    st.session_state.process_audio = False
+            
+            # Only show visualizations if we have processed audio
+            if st.session_state.enhanced_path is not None:
+                # Load audio for visualization
                 y_original, sr_original = librosa.load(tmp_filepath, sr=None)
-                y_enhanced, sr_enhanced = librosa.load(enhanced_path, sr=None)
-                
-                st.success("Audio processing complete!")
+                y_enhanced, sr_enhanced = librosa.load(st.session_state.enhanced_path, sr=None)
                 
                 # Display waveforms
                 st.subheader("Audio Waveforms")
@@ -114,7 +161,7 @@ def main():
                     st.pyplot(fig)
                     
                     # Processed audio player
-                    st.audio(enhanced_path, format="audio/wav")
+                    st.audio(st.session_state.enhanced_path, format="audio/wav")
                 
                 # Spectrograms
                 st.subheader("Spectrograms")
@@ -136,27 +183,18 @@ def main():
                     ax.set_title("Enhanced Speech Spectrogram")
                     st.pyplot(fig)
                 
-                # Download button
+                # Download button using session state data
                 st.subheader("Download Processed Audio")
-                with open(enhanced_path, "rb") as file:
-                    btn = st.download_button(
-                        label="Download Enhanced Speech",
-                        data=file,
-                        file_name=f"enhanced_{uploaded_file.name.split('.')[0]}.wav",
-                        mime="audio/wav"
-                    )
-                
-            except Exception as e:
-                logger.error(f"Error processing audio: {str(e)}", exc_info=True)
-                st.error(f"Error processing audio: {str(e)}")
+                st.download_button(
+                    label="Download Enhanced Speech",
+                    data=st.session_state.enhanced_audio,
+                    file_name=f"enhanced_{uploaded_file.name.split('.')[0]}.wav",
+                    mime="audio/wav"
+                )
             
-            finally:
-                # Clean up temporary files
-                try:
-                    os.remove(tmp_filepath)
-                    logger.debug(f"Cleaned up temporary file: {tmp_filepath}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temporary file: {tmp_filepath}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error processing audio: {str(e)}", exc_info=True)
+            st.error(f"Error processing audio: {str(e)}")
 
 if __name__ == "__main__":
     main()

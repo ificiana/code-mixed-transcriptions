@@ -43,6 +43,30 @@ if 'chunk_paths' not in st.session_state:
     st.session_state.chunk_paths = None
 if 'processed_file' not in st.session_state:
     st.session_state.processed_file = None
+if 'chunk_data' not in st.session_state:
+    st.session_state.chunk_data = {}
+if 'create_chunks' not in st.session_state:
+    st.session_state.create_chunks = False
+
+def process_chunks(filepath, duration):
+    """Process audio into chunks and store in session state"""
+    logger.info(f"Starting audio chunking with duration: {duration} seconds")
+    
+    # Clean up old chunks before processing new ones
+    cleanup_old_chunks()
+    
+    audio_processor = get_audio_processor()
+    st.session_state.chunk_paths = audio_processor.chunk_audio(filepath, duration)
+    
+    # Store chunk data in session state
+    st.session_state.chunk_data = {}
+    for i, chunk_path in enumerate(st.session_state.chunk_paths, 1):
+        with open(chunk_path, "rb") as file:
+            st.session_state.chunk_data[i] = file.read()
+    
+    num_chunks = len(st.session_state.chunk_paths)
+    logger.info(f"Successfully created {num_chunks} chunks")
+    return num_chunks
 
 def main():
     logger.info("Starting Audio Chunking page")
@@ -95,19 +119,15 @@ def main():
             # Only process if file changed or no chunks exist
             if st.session_state.processed_file != uploaded_file.name or st.session_state.chunk_paths is None:
                 if st.button("Create Chunks"):
-                    logger.info(f"Starting audio chunking with duration: {chunk_duration} seconds")
-                    st.info("Creating audio chunks...")
-                    
-                    # Clean up old chunks before processing new ones
-                    cleanup_old_chunks()
-                    
-                    audio_processor = get_audio_processor()
-                    st.session_state.chunk_paths = audio_processor.chunk_audio(tmp_filepath, chunk_duration)
+                    st.session_state.create_chunks = True
                     st.session_state.processed_file = uploaded_file.name
-                    
-                    num_chunks = len(st.session_state.chunk_paths)
-                    logger.info(f"Successfully created {num_chunks} chunks")
-                    st.success(f"Created {num_chunks} chunks!")
+            
+            # Process chunks if button was clicked
+            if st.session_state.create_chunks:
+                st.info("Creating audio chunks...")
+                num_chunks = process_chunks(tmp_filepath, chunk_duration)
+                st.success(f"Created {num_chunks} chunks!")
+                st.session_state.create_chunks = False
             
             # Display chunks if they exist
             if st.session_state.chunk_paths:
@@ -131,14 +151,13 @@ def main():
                             st.markdown(f"**Duration:** {chunk_duration:.2f} seconds")
                             # Audio player
                             st.audio(chunk_path, format="audio/wav")
-                            # Download button
-                            with open(chunk_path, "rb") as file:
-                                st.download_button(
-                                    label=f"Download Chunk {i}",
-                                    data=file,
-                                    file_name=f"chunk_{i}_{uploaded_file.name.split('.')[0]}.wav",
-                                    mime="audio/wav"
-                                )
+                            # Download button using session state data
+                            st.download_button(
+                                label=f"Download Chunk {i}",
+                                data=st.session_state.chunk_data[i],
+                                file_name=f"chunk_{i}_{uploaded_file.name.split('.')[0]}.wav",
+                                mime="audio/wav"
+                            )
                 
         except Exception as e:
             logger.error(f"Error processing audio: {str(e)}", exc_info=True)
