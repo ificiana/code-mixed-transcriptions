@@ -169,8 +169,11 @@ def process_audio_file(filepath, num_speakers=None, original_filename=None):
             original_filename=original_name
         )
 
+        # Convert num_speakers=0 to None for auto-detection
+        effective_num_speakers = None if num_speakers == 0 else num_speakers
+
         # Run diarization
-        diarization = pipeline(resampled_path, num_speakers=num_speakers)
+        diarization = pipeline(resampled_path, num_speakers=effective_num_speakers)
 
     # Cache results with mapping using original name for consistency
     cache_path = get_cache_path(resampled_path, original_name)
@@ -227,10 +230,10 @@ def main():
         st.header("Processing Settings")
         num_speakers = st.slider(
             "Number of Speakers",
-            min_value=2,
+            min_value=0,
             max_value=10,
             value=None,
-            help="Expected number of speakers. Leave at None to auto-detect.",
+            help="Expected number of speakers. Set to 0 for auto-detect.",
         )
 
         st.header("Display Settings")
@@ -245,6 +248,32 @@ def main():
             if torch.cuda.is_available()
             else "Using CPU for processing (slower)"
         )
+
+        # Cache clearing buttons
+        st.header("Cache Management")
+        if st.button("Clear Results Cache"):
+            # Clear diarization results cache
+            for file in CACHE_DIR.glob("*.pkl"):
+                try:
+                    file.unlink()
+                    logger.debug(f"Removed cached result: {file}")
+                except Exception as e:
+                    logger.error(f"Failed to remove cache file: {file}", exc_info=True)
+            # Clear file mappings for cache
+            file_mapper.clear_mappings("cache")
+            st.success("Results cache cleared!")
+
+        if st.button("Clear Resampled Audio Cache"):
+            # Clear resampled audio files
+            for file in CACHE_DIR.glob("*.wav"):
+                try:
+                    file.unlink()
+                    logger.debug(f"Removed resampled audio: {file}")
+                except Exception as e:
+                    logger.error(f"Failed to remove resampled file: {file}", exc_info=True)
+            # Clear file mappings for resampled
+            file_mapper.clear_mappings("resampled")
+            st.success("Resampled audio cache cleared!")
 
     # File uploader
     uploaded_file = st.file_uploader(
@@ -287,6 +316,30 @@ def main():
 
             # Display results if we have processed audio
             if st.session_state.diarization_output is not None:
+                # Cache management for current file
+                st.subheader("File Cache Management")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Clear This File's Results Cache"):
+                        cache_file = file_mapper.get_mapping(uploaded_file.name, "cache")
+                        if cache_file and Path(cache_file).exists():
+                            Path(cache_file).unlink()
+                            logger.debug(f"Removed cached result for: {uploaded_file.name}")
+                            file_mapper.remove_mapping(uploaded_file.name, "cache")
+                            st.session_state.diarization_output = None
+                            st.success("File's results cache cleared!")
+                            st.experimental_rerun()
+
+                with col2:
+                    if st.button("Clear This File's Audio Cache"):
+                        resampled_file = file_mapper.get_mapping(uploaded_file.name, "resampled")
+                        if resampled_file and Path(resampled_file).exists():
+                            Path(resampled_file).unlink()
+                            logger.debug(f"Removed resampled audio for: {uploaded_file.name}")
+                            file_mapper.remove_mapping(uploaded_file.name, "resampled")
+                            st.success("File's audio cache cleared!")
+                            st.experimental_rerun()
+
                 # Load audio for visualization
                 y, sr = librosa.load(tmp_filepath, sr=None)
 

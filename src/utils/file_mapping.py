@@ -69,3 +69,16 @@ class FileMapper:
             if mappings.get(file_type) == processed_file:
                 return orig
         return None
+
+    def remove_mapping(self, original_file: str, file_type: str):
+        """Remove a specific file mapping.
+
+        Args:
+            original_file: Original filename
+            file_type: Type of mapping to remove
+        """
+        if original_file in self.mapping and file_type in self.mapping[original_file]:
+            del self.mapping[original_file][file_type]
+            if not self.mapping[original_file]:  # If no mappings left for this file
+                del self.mapping[original_file]
+            self._save_mapping()
