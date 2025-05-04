@@ -7,10 +7,12 @@ sys.path.append(".")
 import atexit
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import librosa
 import numpy as np
 import torch
+import torchaudio
 
 from src.audio_processor import AudioProcessor
 from src.utils.audio_viz import display_audio_visualizations
@@ -57,18 +59,111 @@ if "processed_file" not in st.session_state:
     st.session_state.processed_file = None
 if "enhanced_path" not in st.session_state:
     st.session_state.enhanced_path = None
+if "start_time" not in st.session_state:
+    st.session_state.start_time = None
 
 
-def process_audio_file(filepath, chunk_size, overlap):
+def update_progress(current, total):
+    """Update progress bar and status"""
+    import time
+
+    # Initialize progress tracking
+    if "progress_bar" not in st.session_state:
+        st.session_state.progress_bar = st.progress(0)
+        st.session_state.status = st.empty()
+        st.session_state.start_time = time.time()
+
+    progress = float(current) / float(total)
+    percentage = int(progress * 100)
+
+    # Calculate time metrics
+    elapsed = time.time() - st.session_state.start_time
+    if current > 1:  # Need at least 2 chunks to estimate
+        chunks_per_second = (current - 1) / elapsed
+        remaining_chunks = total - current
+        eta = remaining_chunks / chunks_per_second if chunks_per_second > 0 else 0
+    else:
+        eta = 0
+
+    # Update progress bar
+    st.session_state.progress_bar.progress(progress)
+
+    # Update status message
+    st.session_state.status.markdown(f"""
+    **Processing Progress:**
+    - Processing chunk {current} of {total}
+    - {percentage}% complete
+    - Time elapsed: {int(elapsed)}s
+    - Estimated remaining: {int(eta)}s
+    """)
+
+    if current == total:
+        final_time = time.time() - st.session_state.start_time
+        st.session_state.status.markdown(f"""
+        **Processing Complete!**
+        - Total time: {int(final_time)}s
+        - Average speed: {total/final_time:.1f} chunks/second
+        """)
+        time.sleep(2)  # Show final stats briefly
+        st.session_state.status.empty()
+        del st.session_state.progress_bar
+        del st.session_state.status
+        del st.session_state.start_time
+
+
+def process_audio_file(filepath, chunk_size, overlap, max_workers):
     """Process audio file and store enhanced audio in session state"""
     logger.info(
-        f"Starting audio processing with chunk_size: {chunk_size}, overlap: {overlap}"
+        f"Starting audio processing with chunk_size: {chunk_size}, overlap: {overlap}, "
+        f"max_workers: {max_workers}"
     )
 
     audio_processor = get_audio_processor()
-    enhanced_path = audio_processor.process_audio(
-        filepath, chunk_size=chunk_size, overlap=overlap
-    )
+    # Convert chunk size to duration (at 16kHz)
+    chunk_duration = chunk_size / 16000  # seconds at 16kHz
+
+    # Create chunks
+    chunk_paths = audio_processor.chunk_audio(filepath, chunk_duration=chunk_duration)
+    total_chunks = len(chunk_paths)
+    logger.info(f"Split audio into {total_chunks} chunks")
+
+    # Process chunks in parallel
+    processed_chunks = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all chunks for processing
+        future_to_chunk = {
+            executor.submit(
+                audio_processor._process_chunk,
+                chunk_path,
+                update_progress,
+                i,
+                total_chunks,
+            ): i
+            for i, chunk_path in enumerate(chunk_paths)
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_chunk):
+            chunk_idx = future_to_chunk[future]
+            try:
+                processed_chunks.append((chunk_idx, future.result()))
+            except Exception as e:
+                logger.error(f"Chunk {chunk_idx} failed: {str(e)}")
+                raise
+
+    # Sort chunks by index
+    processed_chunks.sort(key=lambda x: x[0])
+    processed_audio = torch.cat([chunk for _, chunk in processed_chunks], dim=1)
+
+    # Create output filename
+    input_filename = os.path.basename(filepath)
+    output_filename = f"enhanced_{os.path.splitext(input_filename)[0]}.wav"
+    output_path = str(audio_processor.output_dir / output_filename)
+
+    # Save processed audio
+    torchaudio.save(output_path, processed_audio, 16000)  # Always save at 16kHz
+    logger.info(f"Successfully saved enhanced audio to: {output_path}")
+    enhanced_path = output_path
     st.session_state.temp_files.append(enhanced_path)
     st.session_state.enhanced_path = enhanced_path
 
@@ -95,11 +190,19 @@ def main():
 
         # Processing settings
         st.subheader("Processing")
+
+        st.header("Display Settings")
+        enable_viz = st.checkbox(
+            "Enable Visualizations",
+            value=True,
+            help="Show waveforms and spectrograms. May be slow for long files.",
+        )
+
         chunk_size = st.select_slider(
             "Chunk Size (samples)",
             options=[8000, 16000, 32000, 48000],
             value=16000,
-            help="Size of audio chunks to process. Larger chunks may improve quality but use more memory. Values in samples at 16kHz (e.g., 16000 = 1 second).",
+            help="Size of audio chunks to process. Larger chunks may improve quality but use more memory. Values in samples at 16kHz.",
         )
 
         overlap = st.slider(
@@ -109,6 +212,24 @@ def main():
             value=0.1,
             step=0.05,
             help="Overlap between chunks to prevent artifacts. Higher values may improve quality but increase processing time.",
+        )
+
+        max_workers = st.slider(
+            "Parallel Workers",
+            min_value=1,
+            max_value=8,
+            value=4,
+            help="Number of parallel processing threads. Higher values may improve speed but use more memory.",
+        )
+
+        st.markdown("---")
+        st.markdown(
+            """
+        **Processing Configuration:**
+        - Chunk Size: {} samples ({:.1f}s at 16kHz)
+        - Overlap: {}%
+        - Parallel Workers: {}
+        """.format(chunk_size, chunk_size / 16000, int(overlap * 100), max_workers)
         )
 
         st.info(
@@ -145,10 +266,10 @@ def main():
         try:
             # Process audio if needed
             if st.session_state.process_audio:
-                with st.spinner("Enhancing speech..."):
-                    process_audio_file(tmp_filepath, chunk_size, overlap)
-                    st.success("Audio processing complete!")
-                    st.session_state.process_audio = False
+                st.markdown("### Processing Audio")
+                process_audio_file(tmp_filepath, chunk_size, overlap, max_workers)
+                st.success("Audio processing complete!")
+                st.session_state.process_audio = False
 
             # Only show visualizations if we have processed audio
             if st.session_state.enhanced_path is not None:
@@ -169,6 +290,7 @@ def main():
                         "Original Audio",
                         audio_data=uploaded_file.getvalue(),
                         audio_format=f"audio/{uploaded_file.name.split('.')[-1]}",
+                        enable_viz=enable_viz,
                     )
 
                 with col2:
@@ -178,6 +300,7 @@ def main():
                         "Enhanced Speech",
                         audio_data=st.session_state.enhanced_audio,
                         audio_format="audio/wav",
+                        enable_viz=enable_viz,
                     )
 
                 # Download button using session state data

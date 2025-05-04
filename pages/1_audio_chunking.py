@@ -61,7 +61,9 @@ def process_chunks(filepath, duration):
     cleanup_old_chunks()
 
     audio_processor = get_audio_processor()
-    st.session_state.chunk_paths = audio_processor.chunk_audio(filepath, duration)
+    st.session_state.chunk_paths = audio_processor.chunk_audio(
+        filepath, chunk_duration=duration
+    )
 
     # Store chunk data in session state
     st.session_state.chunk_data = {}
@@ -87,6 +89,14 @@ def main():
         st.header("Chunking Settings")
         chunk_duration = st.slider(
             "Chunk Duration (seconds)", 10, 300, 30, help="Duration of each audio chunk"
+        )
+
+        st.markdown("---")
+        st.header("Display Settings")
+        enable_viz = st.checkbox(
+            "Enable Visualizations",
+            value=True,
+            help="Show waveforms and spectrograms. May be slow for long files.",
         )
 
     # File uploader
@@ -116,6 +126,7 @@ def main():
                 "Original Audio",
                 audio_data=uploaded_file.getvalue(),
                 audio_format=f"audio/{uploaded_file.name.split('.')[-1]}",
+                enable_viz=enable_viz,
             )
             st.markdown(f"**Duration:** {duration:.2f} seconds")
             st.markdown(f"**Sample Rate:** {sr_original} Hz")
@@ -152,8 +163,12 @@ def main():
                             f"Chunk {i}",
                             audio_data=st.session_state.chunk_data[i],
                             audio_format="audio/wav",
+                            enable_viz=enable_viz,
                         )
-                        st.markdown(f"**Duration:** {chunk_duration:.2f} seconds")
+                        st.markdown(f"""
+                        **Duration:** {chunk_duration:.2f} seconds
+                        **Sample Rate:** {sr_chunk} Hz
+                        """)
 
                         # Download button using session state data
                         st.download_button(

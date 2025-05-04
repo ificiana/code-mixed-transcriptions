@@ -98,12 +98,30 @@ def generate_visualizations(
     return plots
 
 
+def is_safe_for_visualization(y: np.ndarray, sr: int, max_duration: int = 300) -> bool:
+    """
+    Check if audio is safe for visualization.
+
+    Args:
+        y: Audio time series
+        sr: Sampling rate
+        max_duration: Maximum duration in seconds for visualization
+
+    Returns:
+        bool: True if safe for visualization
+    """
+    duration = len(y) / sr
+    memory_size = y.nbytes / (1024 * 1024 * 1024)  # Size in GB
+    return duration <= max_duration and memory_size < 1.0
+
+
 def display_audio_visualizations(
     y: np.ndarray,
     sr: int,
     title: str,
     audio_data: bytes = None,
     audio_format: str = "audio/wav",
+    enable_viz: bool = True,
 ) -> None:
     """
     Generate and display audio visualizations in Streamlit.
@@ -114,19 +132,38 @@ def display_audio_visualizations(
         title: Title for the visualization section
         audio_data: Optional audio data for playback
         audio_format: Audio format for playback
+        enable_viz: Whether to enable visualizations
     """
-    # Generate visualizations in parallel
-    plots = generate_visualizations(y, sr, title)
-
-    # Display waveform and audio player
     st.markdown(f"**{title}**")
-    if "waveform" in plots:
-        st.pyplot(plots["waveform"])
+
+    # Display basic info
+    duration = len(y) / sr
+    st.markdown(f"""
+    - Duration: {duration:.2f} seconds
+    - Sample Rate: {sr} Hz
+    - Channels: {y.shape[0] if len(y.shape) > 1 else 1}
+    """)
 
     # Display audio player if data provided
     if audio_data is not None:
         st.audio(audio_data, format=audio_format)
 
-    # Display spectrogram
-    if "spectrogram" in plots:
-        st.pyplot(plots["spectrogram"])
+    # Check if visualizations are enabled and safe
+    if enable_viz and is_safe_for_visualization(y, sr):
+        with st.spinner("Generating visualizations..."):
+            try:
+                # Generate visualizations in parallel
+                plots = generate_visualizations(y, sr, title)
+
+                # Display plots
+                if "waveform" in plots:
+                    st.pyplot(plots["waveform"])
+                if "spectrogram" in plots:
+                    st.pyplot(plots["spectrogram"])
+            except Exception as e:
+                st.warning(f"Could not generate visualizations: {str(e)}")
+    elif enable_viz:
+        st.warning(
+            "Audio visualization disabled for long files (>5 min) to prevent memory issues. "
+            "Basic audio information is shown above."
+        )

@@ -7,14 +7,16 @@ It uses Facebook's denoiser for speech enhancement.
 
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Union
 
 import soundfile as sf
 import torch
 import torchaudio
 from denoiser import pretrained
 from denoiser.dsp import convert_audio
+from tqdm import tqdm
 
 from .utils.logging_config import get_logger
 
@@ -92,19 +94,62 @@ class AudioProcessor:
         except Exception as e:
             raise ValueError(f"Failed to read audio file: {str(e)}")
 
+    def _process_chunk(
+        self,
+        chunk_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        chunk_idx: int = 0,
+        total_chunks: int = 1,
+    ) -> torch.Tensor:
+        """
+        Process a single audio chunk.
+
+        Args:
+            chunk_path: Path to the chunk file
+            progress_callback: Optional callback for progress updates
+            chunk_idx: Index of current chunk
+            total_chunks: Total number of chunks
+
+        Returns:
+            Processed audio tensor
+        """
+        try:
+            # Load chunk
+            wav, sr = torchaudio.load(chunk_path)
+            wav = wav.to(self.device)
+            wav = convert_audio(wav, sr, self.model.sample_rate, self.model.chin)
+
+            # Process chunk
+            with torch.no_grad():
+                denoised = self.model(wav[None])[0]
+
+            # Update progress if callback provided
+            if progress_callback:
+                progress_callback(chunk_idx + 1, total_chunks)
+
+            return denoised.cpu()
+
+        except Exception as e:
+            logger.error(f"Error processing chunk {chunk_path}: {str(e)}")
+            raise
+
     def process_audio(
         self,
         audio_path: str,
-        chunk_size: int = 16000,  # Not used in new implementation
-        overlap: float = 0.1,  # Not used in new implementation
+        chunk_size: int = 16000,
+        overlap: float = 0.1,
+        max_workers: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> str:
         """
         Process an audio file to enhance speech and reduce noise.
 
         Args:
             audio_path: Path to the input audio file.
-            chunk_size: Not used in new implementation.
-            overlap: Not used in new implementation.
+            chunk_size: Size of chunks in samples (at model sample rate).
+            overlap: Overlap between chunks (0.0 to 0.5).
+            max_workers: Maximum number of worker threads for parallel processing.
+            progress_callback: Optional callback for progress updates.
 
         Returns:
             Path to the processed audio file.
@@ -113,34 +158,53 @@ class AudioProcessor:
         self._validate_audio_file(audio_path)
 
         try:
-            # Load audio using torchaudio
-            wav, sr = torchaudio.load(audio_path)
-            logger.debug(f"Loaded audio - Shape: {wav.shape}, Sample rate: {sr}")
+            # Create chunks
+            chunk_paths = self.chunk_audio(audio_path, chunk_size=chunk_size)
+            total_chunks = len(chunk_paths)
+            logger.info(f"Split audio into {total_chunks} chunks")
 
-            # Move to device and convert audio
-            wav = wav.to(self.device)
-            wav = convert_audio(wav, sr, self.model.sample_rate, self.model.chin)
+            # Process chunks in parallel
+            processed_chunks = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all chunks for processing
+                future_to_chunk = {
+                    executor.submit(
+                        self._process_chunk,
+                        chunk_path,
+                        progress_callback,
+                        i,
+                        total_chunks,
+                    ): i
+                    for i, chunk_path in enumerate(chunk_paths)
+                }
 
-            # Process audio
-            with torch.no_grad():
-                denoised = self.model(wav[None])[0]
+                # Collect results as they complete
+                for future in as_completed(future_to_chunk):
+                    chunk_idx = future_to_chunk[future]
+                    try:
+                        processed_chunks.append((chunk_idx, future.result()))
+                    except Exception as e:
+                        logger.error(f"Chunk {chunk_idx} failed: {str(e)}")
+                        raise
+
+            # Sort chunks by index
+            processed_chunks.sort(key=lambda x: x[0])
+            processed_audio = torch.cat([chunk for _, chunk in processed_chunks], dim=1)
 
             # Create output filename
             input_filename = os.path.basename(audio_path)
             output_filename = f"enhanced_{os.path.splitext(input_filename)[0]}.wav"
             output_path = str(self.output_dir / output_filename)
 
-            # Verify the output directory still exists
+            # Verify output directory
             if not self.output_dir.exists():
                 os.makedirs(self.output_dir, exist_ok=True)
                 logger.warning(
                     f"Output directory was missing, recreated: {self.output_dir}"
                 )
 
-            # Save processed audio using torchaudio
-            # Ensure audio is in the correct format for saving (move to CPU and convert to float32)
-            denoised = denoised.cpu().float()
-            torchaudio.save(output_path, denoised, self.model.sample_rate)
+            # Save processed audio
+            torchaudio.save(output_path, processed_audio, self.model.sample_rate)
             logger.info(f"Successfully saved enhanced audio to: {output_path}")
 
             return output_path
@@ -163,20 +227,22 @@ class AudioProcessor:
         try:
             # Load audio using torchaudio
             wav, sr = torchaudio.load(audio_path)
+            logger.debug(f"Loaded audio - Shape: {wav.shape}, Sample rate: {sr}")
 
             # Calculate chunk size in samples
             chunk_size = int(chunk_duration * sr)
 
             # Calculate number of chunks
-            num_chunks = int(torch.ceil(torch.tensor(wav.shape[1] / chunk_size)))
+            total_samples = wav.shape[1]
+            num_chunks = int(torch.ceil(torch.tensor(total_samples / chunk_size)))
 
             chunk_paths = []
 
             # Create chunks
             for i in range(num_chunks):
-                # Extract chunk
+                # Calculate chunk boundaries
                 start = i * chunk_size
-                end = min(start + chunk_size, wav.shape[1])
+                end = min(start + chunk_size, total_samples)
                 chunk = wav[:, start:end]
 
                 # Create output filename
@@ -186,10 +252,11 @@ class AudioProcessor:
                 )
                 chunk_path = str(self.output_dir / chunk_filename)
 
-                # Save chunk
+                # Save chunk at original sample rate
                 torchaudio.save(chunk_path, chunk, sr)
                 chunk_paths.append(chunk_path)
 
+            logger.info(f"Split audio into {len(chunk_paths)} chunks")
             return chunk_paths
 
         except Exception as e:
