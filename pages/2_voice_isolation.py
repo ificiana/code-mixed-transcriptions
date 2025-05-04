@@ -3,11 +3,10 @@ import sys
 sys.path.append(".")
 
 from src.utils.logging_config import get_logger
+from src.utils.audio_viz import display_audio_visualizations
 from src.audio_processor import AudioProcessor
 import numpy as np
-import matplotlib.pyplot as plt
 import librosa
-import librosa.display
 import os
 import tempfile
 import torch
@@ -139,49 +138,27 @@ def main():
                 y_original, sr_original = librosa.load(tmp_filepath, sr=None)
                 y_enhanced, sr_enhanced = librosa.load(st.session_state.enhanced_path, sr=None)
                 
-                # Display waveforms
-                st.subheader("Audio Waveforms")
+                # Display waveforms and spectrograms in parallel
+                st.subheader("Audio Comparison")
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    st.markdown("**Original Audio**")
-                    fig, ax = plt.subplots(figsize=(10, 2))
-                    librosa.display.waveshow(y_original, sr=sr_original, ax=ax)
-                    ax.set_title("Original Audio")
-                    st.pyplot(fig)
-                    
-                    # Original audio player
-                    st.audio(tmp_filepath, format=f"audio/{uploaded_file.name.split('.')[-1]}")
+                    display_audio_visualizations(
+                        y_original,
+                        sr_original,
+                        "Original Audio",
+                        audio_data=uploaded_file.getvalue(),
+                        audio_format=f"audio/{uploaded_file.name.split('.')[-1]}"
+                    )
                 
                 with col2:
-                    st.markdown("**Enhanced Speech**")
-                    fig, ax = plt.subplots(figsize=(10, 2))
-                    librosa.display.waveshow(y_enhanced, sr=sr_enhanced, ax=ax)
-                    ax.set_title("Enhanced Speech")
-                    st.pyplot(fig)
-                    
-                    # Processed audio player
-                    st.audio(st.session_state.enhanced_path, format="audio/wav")
-                
-                # Spectrograms
-                st.subheader("Spectrograms")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.markdown("**Original Audio Spectrogram**")
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    D = librosa.amplitude_to_db(np.abs(librosa.stft(y_original)), ref=np.max)
-                    librosa.display.specshow(D, y_axis='log', x_axis='time', sr=sr_original, ax=ax)
-                    ax.set_title("Original Audio Spectrogram")
-                    st.pyplot(fig)
-                
-                with col2:
-                    st.markdown("**Enhanced Speech Spectrogram**")
-                    fig, ax = plt.subplots(figsize=(10, 4))
-                    D = librosa.amplitude_to_db(np.abs(librosa.stft(y_enhanced)), ref=np.max)
-                    librosa.display.specshow(D, y_axis='log', x_axis='time', sr=sr_enhanced, ax=ax)
-                    ax.set_title("Enhanced Speech Spectrogram")
-                    st.pyplot(fig)
+                    display_audio_visualizations(
+                        y_enhanced,
+                        sr_enhanced,
+                        "Enhanced Speech",
+                        audio_data=st.session_state.enhanced_audio,
+                        audio_format="audio/wav"
+                    )
                 
                 # Download button using session state data
                 st.subheader("Download Processed Audio")

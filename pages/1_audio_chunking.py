@@ -3,10 +3,9 @@ import sys
 sys.path.append(".")
 
 from src.utils.logging_config import get_logger
+from src.utils.audio_viz import display_audio_visualizations
 from src.audio_processor import AudioProcessor
 import librosa
-import librosa.display
-import matplotlib.pyplot as plt
 import os
 import tempfile
 
@@ -102,19 +101,15 @@ def main():
             duration = len(y_original) / sr_original
             
             st.subheader("Original Audio")
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                # Display waveform
-                fig, ax = plt.subplots(figsize=(10, 2))
-                librosa.display.waveshow(y_original, sr=sr_original, ax=ax)
-                ax.set_title("Original Audio Waveform")
-                st.pyplot(fig)
-            
-            with col2:
-                st.markdown(f"**Duration:** {duration:.2f} seconds")
-                st.markdown(f"**Sample Rate:** {sr_original} Hz")
-                st.audio(tmp_filepath, format=f"audio/{uploaded_file.name.split('.')[-1]}")
+            display_audio_visualizations(
+                y_original,
+                sr_original,
+                "Original Audio",
+                audio_data=uploaded_file.getvalue(),
+                audio_format=f"audio/{uploaded_file.name.split('.')[-1]}"
+            )
+            st.markdown(f"**Duration:** {duration:.2f} seconds")
+            st.markdown(f"**Sample Rate:** {sr_original} Hz")
             
             # Only process if file changed or no chunks exist
             if st.session_state.processed_file != uploaded_file.name or st.session_state.chunk_paths is None:
@@ -138,26 +133,23 @@ def main():
                         y_chunk, sr_chunk = librosa.load(chunk_path, sr=None)
                         chunk_duration = len(y_chunk) / sr_chunk
                         
-                        col1, col2 = st.columns([2, 1])
+                        # Display chunk visualizations
+                        display_audio_visualizations(
+                            y_chunk,
+                            sr_chunk,
+                            f"Chunk {i}",
+                            audio_data=st.session_state.chunk_data[i],
+                            audio_format="audio/wav"
+                        )
+                        st.markdown(f"**Duration:** {chunk_duration:.2f} seconds")
                         
-                        with col1:
-                            # Display waveform
-                            fig, ax = plt.subplots(figsize=(10, 2))
-                            librosa.display.waveshow(y_chunk, sr=sr_chunk, ax=ax)
-                            ax.set_title(f"Chunk {i} Waveform")
-                            st.pyplot(fig)
-                        
-                        with col2:
-                            st.markdown(f"**Duration:** {chunk_duration:.2f} seconds")
-                            # Audio player
-                            st.audio(chunk_path, format="audio/wav")
-                            # Download button using session state data
-                            st.download_button(
-                                label=f"Download Chunk {i}",
-                                data=st.session_state.chunk_data[i],
-                                file_name=f"chunk_{i}_{uploaded_file.name.split('.')[0]}.wav",
-                                mime="audio/wav"
-                            )
+                        # Download button using session state data
+                        st.download_button(
+                            label=f"Download Chunk {i}",
+                            data=st.session_state.chunk_data[i],
+                            file_name=f"chunk_{i}_{uploaded_file.name.split('.')[0]}.wav",
+                            mime="audio/wav"
+                        )
                 
         except Exception as e:
             logger.error(f"Error processing audio: {str(e)}", exc_info=True)
