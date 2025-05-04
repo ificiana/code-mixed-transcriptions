@@ -6,7 +6,7 @@ in parallel using ThreadPoolExecutor.
 """
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import librosa
 import librosa.display
@@ -122,7 +122,8 @@ def display_audio_visualizations(
     audio_data: bytes = None,
     audio_format: str = "audio/wav",
     enable_viz: bool = True,
-) -> None:
+    return_fig: bool = False,
+) -> Optional[plt.Figure]:
     """
     Generate and display audio visualizations in Streamlit.
 
@@ -133,6 +134,10 @@ def display_audio_visualizations(
         audio_data: Optional audio data for playback
         audio_format: Audio format for playback
         enable_viz: Whether to enable visualizations
+        return_fig: Whether to return the waveform figure for additional plotting
+
+    Returns:
+        Optional[plt.Figure]: Waveform figure if return_fig is True and visualization is enabled
     """
     st.markdown(f"**{title}**")
 
@@ -155,6 +160,10 @@ def display_audio_visualizations(
                 # Generate visualizations in parallel
                 plots = generate_visualizations(y, sr, title)
 
+                # Return waveform figure if requested
+                if return_fig and "waveform" in plots:
+                    return plots["waveform"]
+
                 # Display plots
                 if "waveform" in plots:
                     st.pyplot(plots["waveform"])
@@ -167,3 +176,5 @@ def display_audio_visualizations(
             "Audio visualization disabled for long files (>5 min) to prevent memory issues. "
             "Basic audio information is shown above."
         )
+
+    return None

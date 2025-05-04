@@ -62,3 +62,7 @@ docs/diagrams/*.svg
 
 # Logs
 *.log
+
+# Diarization
+diarization_cache/
+diarization_results/
