@@ -27,11 +27,11 @@ def main():
     
     with col1:
         if st.button("🎵 Audio Chunking", use_container_width=True, help="Split long recordings into smaller segments"):
-            st.switch_page("1_audio_chunking.py")
+            st.switch_page("pages/1_audio_chunking.py")
     
     with col2:
         if st.button("🎤 Voice Isolation", use_container_width=True, help="Extract clean vocals from mixed audio"):
-            st.switch_page("2_voice_isolation.py")
+            st.switch_page("pages/2_voice_isolation.py")
             
     st.markdown("""
     """)
