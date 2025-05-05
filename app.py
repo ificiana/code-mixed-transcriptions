@@ -33,12 +33,22 @@ def main():
        - Remove background noise
        - Multiple model options for different quality/speed tradeoffs
     
+    3. **Speaker Diarization**
+       - Identify and segment different speakers
+       - Generate RTTM files with speaker timings
+       - Visualize speaker segments
+    
+    4. **Audio Transcription**
+       - Transcribe Tamil-English code-mixed speech
+       - Support for non-native English accents
+       - Speaker-wise transcription with timestamps
+    
     ### 📝 Getting Started
     
     Choose a tool to get started:
     """)
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         if st.button(
@@ -57,6 +67,24 @@ def main():
         ):
             logger.info("Navigating to Voice Isolation page")
             st.switch_page("pages/2_voice_isolation.py")
+            
+    with col3:
+        if st.button(
+            "👥 Speaker Diarization",
+            use_container_width=True,
+            help="Identify and segment different speakers",
+        ):
+            logger.info("Navigating to Speaker Diarization page")
+            st.switch_page("pages/3_speaker_diarization.py")
+            
+    with col4:
+        if st.button(
+            "📝 Transcription",
+            use_container_width=True,
+            help="Transcribe Tamil-English code-mixed speech",
+        ):
+            logger.info("Navigating to Transcription page")
+            st.switch_page("pages/4_transcription.py")
 
     st.markdown("""
     """)

@@ -66,3 +66,6 @@ docs/diagrams/*.svg
 # Diarization
 diarization_cache/
 diarization_results/
+
+# Transcription
+transcription_cache/

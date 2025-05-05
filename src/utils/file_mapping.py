@@ -82,3 +82,19 @@ class FileMapper:
             if not self.mapping[original_file]:  # If no mappings left for this file
                 del self.mapping[original_file]
             self._save_mapping()
+            
+    def clear_mappings(self, file_type: str):
+        """Clear all mappings of a specific type.
+        
+        Args:
+            file_type: Type of mappings to clear (e.g., 'cache', 'rttm')
+        """
+        # Create list of files to remove to avoid modifying dict during iteration
+        to_remove = []
+        for original_file in self.mapping:
+            if file_type in self.mapping[original_file]:
+                to_remove.append(original_file)
+        
+        # Remove mappings
+        for original_file in to_remove:
+            self.remove_mapping(original_file, file_type)
