@@ -1,18 +1,35 @@
-# Voice Isolation App
+# Audio Processing App
 
-A simple Streamlit application for audio denoising and voice isolation.
+A comprehensive Streamlit application for audio processing, including chunking, voice isolation, speaker diarization, and transcription.
 
 ## Overview
 
-This application helps you clean audio files by isolating vocals and removing background noise. It uses the Demucs deep learning model to separate vocals from other audio components.
+This application provides a suite of tools for working with audio files, particularly focused on speech processing. It helps you split long recordings, clean audio by isolating vocals, identify different speakers, and transcribe Tamil-English code-mixed speech.
 
 ## Features
 
-- Upload audio files (MP3, WAV, OGG, FLAC)
-- Isolate vocals using deep learning
-- Visualize audio waveforms and spectrograms
-- Compare original and processed audio
-- Download the isolated vocals
+- **Audio Chunking**
+  - Split long audio files into smaller chunks
+  - Customize chunk duration
+  - Download individual chunks
+
+- **Voice Isolation**
+  - Isolate vocals using deep learning
+  - Remove background noise
+  - Multiple model options for different quality/speed tradeoffs
+  - Visualize audio waveforms and spectrograms
+  - Compare original and processed audio
+
+- **Speaker Diarization**
+  - Identify and segment different speakers
+  - Generate RTTM files with speaker timings
+  - Visualize speaker segments
+
+- **Audio Transcription**
+  - Transcribe Tamil-English code-mixed speech
+  - Support for non-native English accents
+  - Speaker-wise transcription with timestamps
+  - Language statistics for each speaker
 
 ## Quick Start
 
@@ -26,10 +43,10 @@ This application helps you clean audio files by isolating vocals and removing ba
 2. Run the application:
    ```bash
    # On Windows
-   venv\Scripts\python run.py
+   venv\Scripts\python app.py
    
    # On macOS/Linux
-   venv/bin/python run.py
+   venv/bin/python app.py
    ```
 
 ### Manual Setup
@@ -55,21 +72,37 @@ This application helps you clean audio files by isolating vocals and removing ba
 
 4. Run the application:
    ```bash
-   # With the run script
-   python run.py
+   # Directly with Python
+   python app.py
    
-   # Directly with Streamlit
-   streamlit run app/app.py
+   # Or with Streamlit
+   streamlit run app.py
    ```
 
 5. Open your browser at http://localhost:8501
 
 ## Technical Stack
 
-- Streamlit: Web application framework
-- Demucs: Deep learning model for audio source separation
-- PyTorch/Torchaudio: Audio processing
-- Librosa: Audio analysis and visualization
+- **Streamlit**: Web application framework
+- **Demucs**: Deep learning model for audio source separation
+- **PyTorch/Torchaudio**: Audio processing
+- **Librosa**: Audio analysis and visualization
+- **Pyannote.audio**: Speaker diarization
+- **Transformers**: Speech recognition and transcription
+- **Facebook MMS**: Multilingual speech model for Tamil-English transcription
+
+## Project Structure
+
+- `app.py`: Main application entry point
+- `pages/`: Individual pages for each feature
+  - `1_audio_chunking.py`: Audio chunking functionality
+  - `2_voice_isolation.py`: Voice isolation functionality
+  - `3_speaker_diarization.py`: Speaker diarization functionality
+  - `4_transcription.py`: Transcription functionality
+- `src/`: Source code for the application
+  - `utils/`: Utility functions for audio processing, visualization, etc.
+- `requirements.txt`: Dependencies for the application
+- `setup.py`: Setup script for creating a virtual environment and installing dependencies
 
 ## License
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Setup script for Voice Isolation App.
+Setup script for Audio Processing App.
 This script creates a virtual environment and installs the required dependencies.
 """
 
@@ -58,15 +58,15 @@ def install_dependencies():
 
 def main():
     """Main function to run the setup."""
-    parser = argparse.ArgumentParser(description="Setup Voice Isolation App")
+    parser = argparse.ArgumentParser(description="Setup Audio Processing App")
     parser.add_argument(
         "--skip-venv", action="store_true", help="Skip virtual environment creation"
     )
 
     args = parser.parse_args()
 
-    print("Voice Isolation App Setup")
-    print("========================")
+    print("Audio Processing App Setup")
+    print("=========================")
 
     # Create virtual environment
     if not args.skip_venv:
@@ -78,12 +78,12 @@ def main():
         return 1
 
     print("\nSetup completed successfully!")
-    print("\nTo run the Voice Isolation App:")
+    print("\nTo run the Audio Processing App:")
 
     if platform.system() == "Windows":
-        print("  venv\\Scripts\\python.exe run.py")
+        print("  venv\\Scripts\\python.exe app.py")
     else:
-        print("  venv/bin/python run.py")
+        print("  venv/bin/python app.py")
 
     return 0
 
