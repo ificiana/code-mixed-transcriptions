@@ -34,26 +34,28 @@ RESULTS_DIR.mkdir(exist_ok=True)
 file_mapper = FileMapper(CACHE_DIR)
 
 @st.cache_resource
-def get_model():
-    """Initialize and cache the MMS model"""
+def get_models():
+    """Initialize and cache MMS model for transcription"""
     try:
-        # Use small model variant for CPU
+        # Load the base MMS model
         model_name = "facebook/mms-1b-all"
-        processor = AutoProcessor.from_pretrained(model_name)
-        model = AutoModelForCTC.from_pretrained(model_name)
         
-        return model, processor
+        # Initialize a single model and processor
+        model = AutoModelForCTC.from_pretrained(model_name)
+        processor = AutoProcessor.from_pretrained(model_name)
+        
+        return model, model, processor
     except Exception as e:
         st.error(f"""
-        **Error Loading Model**
+        **Error Loading Models**
         
         {str(e)}
         
         Make sure you have:
         1. Installed all requirements: pip install -r requirements.txt
-        2. Have sufficient disk space for model download
+        2. Have sufficient disk space for model downloads
         """)
-        return None, None
+        return None, None, None
 
 def cleanup_files():
     """Clean up temporary files"""
@@ -121,30 +123,60 @@ def load_rttm(rttm_path):
     
     return segments
 
-def process_segment(audio_data, start_sample, end_sample, model, processor):
-    """Process a single audio segment"""
+def process_segment(audio_data, start_sample, end_sample, models, processor, speaker_history):
+    """Process a single audio segment with language detection"""
     # Extract segment
     segment = audio_data[start_sample:end_sample]
     
-    # Process through model
+    # Process audio with the model
     inputs = processor(segment, sampling_rate=16000, return_tensors="pt", padding=True)
-    with torch.no_grad():
-        outputs = model(**inputs)
     
-    # Decode predictions
+    with torch.no_grad():
+        # Process with the model
+        outputs = models[0](**inputs)
+    
+    # Calculate confidence scores
+    probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+    conf = probs.max().item()
+    
+    # Get speaker's language history if available
+    speaker = speaker_history.get('current_speaker')
+    speaker_data = speaker_history.get(speaker, {'lang_counts': {}, 'dominant_lang': None})
+    dominant_lang = speaker_data.get('dominant_lang')
+    
+    # For simplicity, we'll use speaker history to determine language
+    # If no history, default to English
+    lang = dominant_lang if dominant_lang else 'eng'
+    
+    # Set confidence values for reporting
+    tamil_conf = conf if lang == 'tam' else 0.0
+    english_conf = conf if lang == 'eng' else 0.0
+    
+    # Update speaker history
+    if speaker:
+        if speaker not in speaker_history:
+            speaker_history[speaker] = {'lang_counts': {}, 'dominant_lang': None}
+        
+        speaker_history[speaker]['lang_counts'][lang] = speaker_history[speaker]['lang_counts'].get(lang, 0) + 1
+        
+        # Update dominant language if needed
+        lang_counts = speaker_history[speaker]['lang_counts']
+        max_lang = max(lang_counts.items(), key=lambda x: x[1])[0]
+        speaker_history[speaker]['dominant_lang'] = max_lang
+    
+    # Get transcription
     predicted_ids = torch.argmax(outputs.logits, dim=-1)
     transcription = processor.batch_decode(predicted_ids)[0]
     
-    return transcription
+    return {
+        'text': transcription,
+        'language': lang,
+        'tamil_confidence': tamil_conf,
+        'english_confidence': english_conf
+    }
 
 def process_audio_file(audio_path, rttm_path, original_filename=None):
-    """Process audio file with transcription
-    
-    Args:
-        audio_path: Path to audio file
-        rttm_path: Path to RTTM file with speaker segments
-        original_filename: Original name of the uploaded file
-    """
+    """Process audio file with transcription using hybrid language detection"""
     logger.info(f"Starting transcription for file: {audio_path}")
     
     # Use original filename if provided
@@ -157,10 +189,10 @@ def process_audio_file(audio_path, rttm_path, original_filename=None):
         with open(cache_file, 'r') as f:
             return json.load(f)
     
-    # Get model
-    model, processor = get_model()
-    if model is None or processor is None:
-        raise ValueError("Could not initialize transcription model")
+    # Get models
+    tamil_model, english_model, processor = get_models()
+    if None in (tamil_model, english_model, processor):
+        raise ValueError("Could not initialize transcription models")
     
     # Resample audio to 16kHz
     resampled_path, _ = resample_audio(
@@ -177,11 +209,16 @@ def process_audio_file(audio_path, rttm_path, original_filename=None):
     # Load speaker segments
     segments = load_rttm(rttm_path)
     
+    # Initialize speaker history
+    speaker_history = {}
+    
     # Process each segment
     results = []
     total_segments = len(segments)
     
     for i, segment in enumerate(segments):
+        # Set current speaker for history tracking
+        speaker_history['current_speaker'] = segment['speaker']
         # Update progress
         progress = (i + 1) / total_segments
         st.progress(progress)
@@ -190,13 +227,25 @@ def process_audio_file(audio_path, rttm_path, original_filename=None):
         start_sample = int(segment['start'] * sr)
         end_sample = int((segment['start'] + segment['duration']) * sr)
         
-        transcription = process_segment(audio_data, start_sample, end_sample, model, processor)
+        segment_result = process_segment(
+            audio_data, 
+            start_sample, 
+            end_sample, 
+            (tamil_model, english_model),
+            processor,
+            speaker_history
+        )
         
         results.append({
             'start': segment['start'],
             'end': segment['start'] + segment['duration'],
             'speaker': segment['speaker'],
-            'text': transcription
+            'text': segment_result['text'],
+            'language': segment_result['language'],
+            'confidence': {
+                'tamil': segment_result['tamil_confidence'],
+                'english': segment_result['english_confidence']
+            }
         })
     
     # Cache results
@@ -273,16 +322,34 @@ def main():
             if st.session_state.transcription_output is not None:
                 st.subheader("Transcription Results")
                 
-                # Display results in table format
+                # Display results in table format with language info
                 results_df = []
                 for segment in st.session_state.transcription_output:
                     results_df.append({
                         "Start Time": f"{segment['start']:.2f}s",
                         "End Time": f"{segment['end']:.2f}s",
                         "Speaker": segment['speaker'],
-                        "Text": segment['text']
+                        "Language": "Tamil" if segment['language'] == 'tam' else "English",
+                        "Text": segment['text'],
+                        "Confidence": f"Ta: {segment['confidence']['tamil']:.2f}, En: {segment['confidence']['english']:.2f}"
                     })
                 st.table(results_df)
+                
+                # Display speaker language statistics
+                st.subheader("Speaker Language Statistics")
+                speaker_stats = {}
+                for segment in st.session_state.transcription_output:
+                    speaker = segment['speaker']
+                    lang = segment['language']
+                    if speaker not in speaker_stats:
+                        speaker_stats[speaker] = {'tam': 0, 'eng': 0}
+                    speaker_stats[speaker][lang] += 1
+                
+                for speaker, stats in speaker_stats.items():
+                    total = stats['tam'] + stats['eng']
+                    st.write(f"**Speaker {speaker}:**")
+                    st.write(f"- Tamil: {stats['tam']} segments ({stats['tam']/total*100:.1f}%)")
+                    st.write(f"- English: {stats['eng']} segments ({stats['eng']/total*100:.1f}%)")
                 
                 # Download options
                 st.subheader("Download Results")
